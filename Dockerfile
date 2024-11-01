@@ -10,8 +10,14 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the secrets.toml file into the .streamlit directory
-COPY secrets.toml /app/.streamlit/secrets.toml
+# Create the directory for Streamlit secrets
+RUN mkdir -p /app/.streamlit
+
+# Accept the secret token as a build argument
+ARG SECRET_TOKEN
+
+# Create the secrets.toml file with the token
+RUN echo "[general]\nemail = \"jatinmehra119@gmail.com\"\n\n[api]\ntoken = \"$SECRET_TOKEN\"" > /app/.streamlit/secrets.toml
 
 # Copy the rest of the application code into the container
 COPY . .
