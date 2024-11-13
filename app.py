@@ -1,8 +1,11 @@
 import os
 import tempfile
+import json
 import streamlit as st
 from streamlit_chat import message
 from preprocessing import Model
+from io import BytesIO
+import pickle
 
 # Home Page Setup 
 st.set_page_config(
@@ -67,6 +70,10 @@ def process_user_input():
         st.session_state["messages"].append((agent_response, False))
         st.session_state["user_input"] = ""
 
+        # Save chat history temporarily on local storage
+        with open("chat_history.pkl", "wb") as f:
+            pickle.dump(st.session_state["messages"], f)
+
 def process_file():
     """
     Processes the uploaded PDF file and appends its content to the context.
@@ -82,6 +89,35 @@ def process_file():
             except Exception as e:
                 st.error(f"Failed to process file {file.name}: {str(e)}")
         os.remove(file_path)
+
+def download_chat_history():
+    """
+    Allows users to download chat history in HTML or JSON format.
+    """
+    # Convert messages to JSON format
+    chat_data = [{"role": "user" if is_user else "assistant", "content": msg} for msg, is_user in st.session_state["messages"]]
+
+    # Download as JSON
+    json_data = json.dumps(chat_data, indent=4)
+    st.download_button(
+        label="💾 Download Chat History as JSON",
+        data=json_data,
+        file_name="chat_history.json",
+        mime="application/json"
+    )
+
+    # Download as HTML
+    html_data = "<html><body><h1>Chat History</h1><ul>"
+    for entry in chat_data:
+        role = "User" if entry["role"] == "user" else "Assistant"
+        html_data += f"<li><strong>{role}:</strong> {entry['content']}</li>"
+    html_data += "</ul></body></html>"
+    st.download_button(
+        label="💾 Download Chat History as HTML",
+        data=html_data,
+        file_name="chat_history.html",
+        mime="text/html"
+    )
 
 def main_page():
     """
@@ -135,6 +171,11 @@ def main_page():
     # Display messages and input box
     display_messages()
     st.text_input("Type your query and hit Enter", key="user_input", on_change=process_user_input, placeholder="Ask something about your documents...")
+    
+    # Download chat history section
+    st.subheader("💾 Download Chat History")
+    download_chat_history()
+
     # Developer info and bug report
     st.subheader("🐞 Bug Report")
     st.markdown("""
@@ -150,5 +191,6 @@ def main_page():
         **Email**: jatinmehra119@gmail.com\n
         **Mobile**: 9910364780\n
     """)
+    
 if __name__ == "__main__":
     main_page()
