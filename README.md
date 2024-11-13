@@ -13,7 +13,7 @@
 -   **Document Management**: Uploaded documents can be reviewed, managed, and removed from the context as needed.
 -   **Interactive UI**: The application has an intuitive and responsive UI with custom styling for an enhanced user experience.
 -   **Error Handling**: The app includes error handling for PDF extraction and model interactions.
-
+-   **Chat History Download**- The app includes an option to download chat history between user and AI agent in HTML, JSON format.
 
 ## Requirements
 
