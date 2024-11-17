@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PDFInsightPro"
+rootProject.name = "PDF-Insight-PRO"
 include ':app'

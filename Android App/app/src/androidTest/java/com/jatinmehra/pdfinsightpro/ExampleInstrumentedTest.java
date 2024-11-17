@@ -21,6 +21,6 @@ public class ExampleInstrumentedTest {
     public void useAppContext() {
         // Context of the app under test.
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals("com.jatinmehra.pdfinsightpro", appContext.getPackageName());
+        assertEquals("com.jatinmehra.pdf_insight_pro", appContext.getPackageName());
     }
 }
