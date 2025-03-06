@@ -165,7 +165,7 @@ def main_page():
     # Model settings
     with st.expander("⚙️ Customize AI Settings", expanded=True):
         st.slider("Sampling Temperature", min_value=0.0, max_value=1.0, step=0.1, key="temperature", help="Higher values make output more random.")
-        st.slider("Max Tokens", min_value=50, max_value=1000, step=50, key="max_tokens", help="Limits the length of the response.")
+        st.slider("Max Tokens", min_value=750, max_value=5000, step=50, key="max_tokens", help="Limits the length of the response.")
         st.selectbox("Choose AI Model", ["llama-3.1-8b-instant", "llama3-70b-8192", "gemma-7b-it"], key="model")
 
     # Display messages and input box
