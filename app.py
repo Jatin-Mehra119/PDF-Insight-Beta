@@ -2,7 +2,7 @@ import os
 import dotenv
 import pickle
 import uuid
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -16,8 +16,7 @@ from preprocessing import (
     build_faiss_index,
     retrieve_similar_chunks,
     agentic_rag,
-    tools,
-    memory
+    tools
 )
 from sentence_transformers import SentenceTransformer
 import shutil
@@ -88,8 +87,8 @@ def load_session(session_id, model_name="meta-llama/llama-4-scout-17b-16e-instru
             # Recreate non-pickled objects
             if data.get("chunks") and data.get("file_path") and os.path.exists(data["file_path"]):
                 # Recreate model, embeddings and index
-                model = SentenceTransformer('all-MiniLM-L6-v2')
-                embeddings = create_embeddings(data["chunks"], model)
+                model = SentenceTransformer('BAAI/bge-large-en-v1.5')
+                embeddings, _ = create_embeddings(data["chunks"], model)  # Unpack tuple
                 index = build_faiss_index(embeddings)
                 
                 # Recreate LLM
@@ -165,13 +164,15 @@ async def upload_pdf(
             raise ValueError("GROQ_API_KEY is not set in the environment variables")
         
         # Process the PDF
-        text = process_pdf_file(file_path)
-        chunks = chunk_text(text, max_length=1500)
+        documents = process_pdf_file(file_path)  # Returns list of Document objects
+        chunks = chunk_text(documents, max_length=1000)  # Updated to handle documents
         
         # Create embeddings
-        model = SentenceTransformer('all-MiniLM-L6-v2')
-        embeddings = create_embeddings(chunks, model)
-        index = build_faiss_index(embeddings)
+        model = SentenceTransformer('BAAI/bge-large-en-v1.5')  # Updated embedding model
+        embeddings, chunks_with_metadata = create_embeddings(chunks, model)  # Unpack tuple
+        
+        # Build FAISS index
+        index = build_faiss_index(embeddings)  # Pass only embeddings array
         
         # Initialize LLM
         llm = model_selection(model_name)
@@ -180,7 +181,7 @@ async def upload_pdf(
         session_data = {
             "file_path": file_path,
             "file_name": file.filename,
-            "chunks": chunks,
+            "chunks": chunks_with_metadata,  # Store chunks with metadata
             "model": model,
             "index": index,
             "llm": llm,
@@ -224,16 +225,15 @@ async def chat(request: ChatRequest):
             session["index"], 
             session["chunks"], 
             session["model"], 
-            k=3
+            k=10
         )
-        context = "\n".join([chunk for chunk, _ in similar_chunks])
         
         # Generate response using agentic_rag
         response = agentic_rag(
             session["llm"], 
             tools, 
             query=request.query, 
-            context=context, 
+            context_chunks=similar_chunks,  # Pass the list of tuples
             Use_Tavily=request.use_search
         )
         
@@ -244,11 +244,12 @@ async def chat(request: ChatRequest):
         return {
             "status": "success", 
             "answer": response["output"],
-            "context_used": [{"text": chunk, "score": float(score)} for chunk, score in similar_chunks]
+            "context_used": [{"text": chunk, "score": float(score)} for chunk, score, _ in similar_chunks]
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+
 
 # Route to get chat history
 @app.post("/chat-history")
