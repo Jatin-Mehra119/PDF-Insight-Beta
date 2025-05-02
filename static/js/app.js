@@ -11,6 +11,7 @@ const modelSelect = document.getElementById('model-select');
 const sessionInfo = document.getElementById('session-info');
 const currentFileName = document.getElementById('current-file-name');
 const clearHistoryBtn = document.getElementById('clear-history');
+const removePdfBtn = document.getElementById('remove-pdf');
 const newChatBtn = document.getElementById('new-chat');
 const loadingOverlay = document.getElementById('loading-overlay');
 const loadingText = document.getElementById('loading-text');
@@ -40,6 +41,7 @@ chatInput.addEventListener('input', () => {
     sendButton.disabled = chatInput.value.trim() === '';
 });
 clearHistoryBtn.addEventListener('click', clearChatHistory);
+removePdfBtn.addEventListener('click', removePdf);
 newChatBtn.addEventListener('click', resetApp);
 getStartedBtn.addEventListener('click', () => {
     uploadBox.click();
@@ -339,6 +341,39 @@ async function clearChatHistory() {
     } catch (error) {
         console.error('Error clearing chat history:', error);
         showError('Failed to clear chat history.');
+    } finally {
+        hideLoading();
+    }
+}
+
+async function removePdf() {
+    if (!currentSessionId) return;
+    
+    try {
+        showLoading('Removing PDF from the system...');
+        
+        const response = await fetch('/remove-pdf', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                session_id: currentSessionId
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            // Reset the app
+            resetApp();
+            showError('PDF file has been removed from the system.');
+        } else {
+            showError('Failed to remove PDF: ' + data.detail);
+        }
+    } catch (error) {
+        console.error('Error removing PDF:', error);
+        showError('Failed to remove PDF. Please try again.');
     } finally {
         hideLoading();
     }

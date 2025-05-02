@@ -33,7 +33,7 @@ body {
 /* App container layout */
 .app-container {
     display: grid;
-    grid-template-columns: 260px 1fr 300px;
+    grid-template-columns: 260px 1fr;
     height: 100vh;
     overflow: hidden;
 }
@@ -151,7 +151,7 @@ body {
     white-space: nowrap;
 }
 
-.btn-clear, .btn-new {
+.btn-clear, .btn-new, .btn-remove {
     padding: 0.75rem;
     border-radius: var(--border-radius);
     border: none;
@@ -168,6 +168,15 @@ body {
 
 .btn-clear:hover {
     background-color: rgba(239, 68, 68, 0.2);
+}
+
+.btn-remove {
+    background-color: rgba(255, 152, 0, 0.1);
+    color: #ff9800;
+}
+
+.btn-remove:hover {
+    background-color: rgba(255, 152, 0, 0.2);
 }
 
 .btn-new {

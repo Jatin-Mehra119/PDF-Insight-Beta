@@ -109,6 +109,32 @@ def load_session(session_id, model_name="meta-llama/llama-4-scout-17b-16e-instru
         print(f"Error loading session: {str(e)}")
         return None, False
 
+# Function to remove PDF file
+def remove_pdf_file(session_id):
+    try:
+        # Check if the session exists
+        session_path = f"{UPLOAD_DIR}/{session_id}_session.pkl"
+        if os.path.exists(session_path):
+            # Load session data
+            with open(session_path, "rb") as f:
+                data = pickle.load(f)
+            
+            # Delete PDF file if it exists
+            if data.get("file_path") and os.path.exists(data["file_path"]):
+                os.remove(data["file_path"])
+            
+            # Remove session file
+            os.remove(session_path)
+        
+        # Remove from memory if exists
+        if session_id in sessions:
+            del sessions[session_id]
+            
+        return True
+    except Exception as e:
+        print(f"Error removing PDF file: {str(e)}")
+        return False
+
 # Mount static files (we'll create these later)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -248,6 +274,16 @@ async def clear_history(request: SessionRequest):
     save_session(request.session_id, session)
     
     return {"status": "success", "message": "Chat history cleared"}
+
+# Route to remove PDF from session
+@app.post("/remove-pdf")
+async def remove_pdf(request: SessionRequest):
+    success = remove_pdf_file(request.session_id)
+    
+    if success:
+        return {"status": "success", "message": "PDF file and session removed successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Session not found or could not be removed")
 
 # Route to list available models
 @app.get("/models")
