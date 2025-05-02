@@ -1,3 +1,6 @@
 secrets.toml
 __pycache__/
 *.pkl
+.env
+*.pdf
+.venv/
