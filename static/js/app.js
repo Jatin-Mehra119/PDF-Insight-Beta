@@ -73,6 +73,19 @@ initializeApp();
 function initializeApp() {
     updateMobileUI();
     
+    // Check if the page was refreshed
+    const pageWasRefreshed = (
+        window.performance && 
+        window.performance.navigation && 
+        window.performance.navigation.type === 1
+    ) || document.referrer === document.location.href;
+    
+    // If page was refreshed, clear any saved session
+    if (pageWasRefreshed) {
+        localStorage.removeItem('pdf_insight_session');
+        return;
+    }
+    
     // Check if we have a session in localStorage
     const savedSession = localStorage.getItem('pdf_insight_session');
     if (savedSession) {
