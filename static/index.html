@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Insight Beta</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/styles.css">
+    <!-- Add Highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <!-- Add Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Mobile menu toggle button -->
+        <button id="menu-toggle" class="menu-toggle hidden">
+            <i class="fas fa-bars"></i>
+        </button>
+        
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="logo-container">
+                <h1>PDF Insight <span class="beta">Beta</span></h1>
+            </div>
+            <div class="upload-container">
+                <div class="upload-box" id="upload-box">
+                    <i class="fas fa-file-pdf upload-icon"></i>
+                    <p>Upload PDF Document</p>
+                    <input type="file" id="pdf-upload" accept=".pdf,.txt" hidden>
+                </div>
+                <div class="model-selection">
+                    <label for="model-select">Select Model:</label>
+                    <select id="model-select">
+                        <option value="meta-llama/llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B</option>
+                        <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
+                        <option value="llama-3.3-70b-versatile">Llama 3.3 70B Versatile</option>
+                    </select>
+                </div>
+                <div class="session-info hidden" id="session-info">
+                    <div class="file-info">
+                        <i class="fas fa-file-pdf"></i>
+                        <span id="current-file-name">No file loaded</span>
+                    </div>
+                    <button id="clear-history" class="btn-clear">Clear History</button>
+                    <button id="new-chat" class="btn-new">New Document</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Welcome Screen -->
+            <div class="welcome-screen" id="welcome-screen">
+                <div class="welcome-header">
+                    <h1>Welcome to PDF Insight Beta</h1>
+                    <p>Upload a PDF document and start asking questions about it</p>
+                </div>
+                <div class="features">
+                    <div class="feature">
+                        <i class="fas fa-file-pdf"></i>
+                        <h3>PDF Processing</h3>
+                        <p>Upload any PDF document for instant analysis</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-robot"></i>
+                        <h3>Agentic RAG</h3>
+                        <p>Advanced retrieval augmented generation for accurate answers</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-search"></i>
+                        <h3>Web Search Integration</h3>
+                        <p>Verify document information with internet search capabilities</p>
+                    </div>
+                </div>
+                <div class="get-started">
+                    <button id="get-started-btn" class="btn-primary">Get Started</button>
+                </div>
+            </div>
+
+            <!-- Chat Interface -->
+            <div class="chat-container hidden" id="chat-container">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="system-message">
+                        <p>Upload successful! You can now ask questions about the document.</p>
+                    </div>
+                </div>
+                <div class="chat-input-container">
+                    <div class="search-toggle">
+                        <input type="checkbox" id="search-toggle">
+                        <label for="search-toggle">Use web search</label>
+                    </div>
+                    <div class="chat-input-box">
+                        <textarea id="chat-input" placeholder="Ask a question about the document..."></textarea>
+                        <button id="send-button" disabled>
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Context Sidebar -->
+        <div class="context-sidebar" id="context-sidebar">
+            <div class="context-header">
+                <h3>Context Used</h3>
+                <button id="toggle-context" class="btn-toggle">
+                    <i class="fas fa-angle-right"></i>
+                </button>
+            </div>
+            <div class="context-content" id="context-content">
+                <p class="no-context">No context available yet. Ask a question first.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay hidden" id="loading-overlay">
+        <div class="spinner"></div>
+        <p id="loading-text">Processing Document...</p>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
