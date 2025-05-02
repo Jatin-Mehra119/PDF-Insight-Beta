@@ -141,7 +141,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Route for the home page
 @app.get("/")
 async def read_root():
-    return {"status": "ok", "message": "PDF Insight Beta API is running"}
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/index.html")
 
 # Route to upload a PDF file
 @app.post("/upload-pdf")
