@@ -1,196 +1,266 @@
 import os
-import tempfile
-import json
-import streamlit as st
-from streamlit_chat import message
-from preprocessing import Model
-from io import BytesIO
+import dotenv
 import pickle
+import uuid
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import uvicorn
+from preprocessing import (
+    model_selection,
+    process_pdf_file,
+    chunk_text,
+    create_embeddings,
+    build_faiss_index,
+    retrieve_similar_chunks,
+    agentic_rag,
+    tools,
+    memory
+)
+from sentence_transformers import SentenceTransformer
+import shutil
+import traceback
 
-# Home Page Setup 
-st.set_page_config(
-    page_title="PDF Insight Pro", 
-    page_icon="📄", 
-    layout="centered",
+# Load environment variables
+dotenv.load_dotenv()
+
+# Initialize FastAPI app
+app = FastAPI(title="PDF Insight Beta", description="Agentic RAG for PDF documents")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Custom CSS for a more polished look
-st.markdown("""
-    <style>
-        .main { 
-            background-color: #f5f5f5;
-        }
-        .stButton button {
-            background-color: #4CAF50;
-            color: white;
-            border-radius: 8px;
-        }
-        .stTextInput input {
-            border-radius: 8px;
-            padding: 10px;
-        }
-        .stFileUploader input {
-            border-radius: 8px;
-        }
-        .stMarkdown h1 {
-            color: #4CAF50;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# Create upload directory if it doesn't exist
+UPLOAD_DIR = "uploads"
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
 
-# Custom title and header
-st.title("📄 PDF Insight Pro")
-st.subheader("Empower Your Documents with AI-Driven Insights")
+# Store active sessions
+sessions = {}
 
-def display_messages():
-    """
-    Displays the chat messages in the Streamlit UI.
-    """
-    st.subheader("🗨️ Conversation")
-    st.markdown("---")
-    for i, (msg, is_user) in enumerate(st.session_state["messages"]):
-        message(msg, is_user=is_user, key=str(i))
-    st.session_state["process_input_spinner"] = st.empty()
+# Define model for chat request
+class ChatRequest(BaseModel):
+    session_id: str
+    query: str
+    use_search: bool = False
+    model_name: str = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-def process_user_input():
-    """
-    Processes the user input by generating a response from the assistant.
-    """
-    if st.session_state["user_input"] and len(st.session_state["user_input"].strip()) > 0:
-        user_input = st.session_state["user_input"].strip()
-        with st.session_state["process_input_spinner"], st.spinner("Analyzing..."):
-            agent_response = st.session_state["assistant"].get_response(
-                user_input,
-                st.session_state["temperature"],
-                st.session_state["max_tokens"],
-                st.session_state["model"]
-            )
+class SessionRequest(BaseModel):
+    session_id: str
 
-        st.session_state["messages"].append((user_input, True))
-        st.session_state["messages"].append((agent_response, False))
-        st.session_state["user_input"] = ""
-
-        # Save chat history temporarily on local storage
-        with open("chat_history.pkl", "wb") as f:
-            pickle.dump(st.session_state["messages"], f)
-
-def process_file():
-    """
-    Processes the uploaded PDF file and appends its content to the context.
-    """
-    for file in st.session_state["file_uploader"]:
-        with tempfile.NamedTemporaryFile(delete=False) as tf:
-            tf.write(file.getbuffer())
-            file_path = tf.name
-
-        with st.session_state["process_file_spinner"], st.spinner(f"Processing {file.name}..."):
-            try:
-                st.session_state["assistant"].add_to_context(file_path)
-            except Exception as e:
-                st.error(f"Failed to process file {file.name}: {str(e)}")
-        os.remove(file_path)
-
-def download_chat_history():
-    """
-    Allows users to download chat history in HTML or JSON format.
-    """
-    # Convert messages to JSON format
-    chat_data = [{"role": "user" if is_user else "assistant", "content": msg} for msg, is_user in st.session_state["messages"]]
-
-    # Download as JSON
-    json_data = json.dumps(chat_data, indent=4)
-    st.download_button(
-        label="💾 Download Chat History as JSON",
-        data=json_data,
-        file_name="chat_history.json",
-        mime="application/json"
-    )
-
-    # Download as HTML
-    html_data = "<html><body><h1>Chat History</h1><ul>"
-    for entry in chat_data:
-        role = "User" if entry["role"] == "user" else "Assistant"
-        html_data += f"<li><strong>{role}:</strong> {entry['content']}</li>"
-    html_data += "</ul></body></html>"
-    st.download_button(
-        label="💾 Download Chat History as HTML",
-        data=html_data,
-        file_name="chat_history.html",
-        mime="text/html"
-    )
-
-def main_page():
-    """
-    Main function to set up the Streamlit UI and handle user interactions.
-    """
-    # Initialize session state variables
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = []
-
-    if "assistant" not in st.session_state:
-        st.session_state["assistant"] = Model()
-
-    if "user_input" not in st.session_state:
-        st.session_state["user_input"] = ""
-
-    if "temperature" not in st.session_state:
-        st.session_state["temperature"] = 0.5
-
-    if "max_tokens" not in st.session_state:
-        st.session_state["max_tokens"] = 550
-
-    if "model" not in st.session_state:
-        st.session_state["model"] = "llama-3.1-8b-instant"
-
-    # File uploader
-    st.subheader("📤 Upload Your PDF Documents")
-    st.file_uploader(
-        "Choose PDF files to analyze",
-        type=["pdf"],
-        key="file_uploader",
-        on_change=process_file,
-        accept_multiple_files=True,
-    )
-
-    st.session_state["process_file_spinner"] = st.empty()
-
-    # Document management section
-    if st.session_state["assistant"].contexts:
-        st.subheader("🗂️ Manage Uploaded Documents")
-        for i, context in enumerate(st.session_state["assistant"].contexts):
-            st.text_area(f"Document {i+1} Context", context[:500] + "..." if len(context) > 500 else context, height=100)
-            if st.button(f"Remove Document {i+1}"):
-                st.session_state["assistant"].remove_from_context(i)
-
-    # Model settings
-    with st.expander("⚙️ Customize AI Settings", expanded=True):
-        st.slider("Sampling Temperature", min_value=0.0, max_value=1.0, step=0.1, key="temperature", help="Higher values make output more random.")
-        st.slider("Max Tokens", min_value=750, max_value=5000, step=50, key="max_tokens", help="Limits the length of the response.")
-        st.selectbox("Choose AI Model", ["llama-3.1-8b-instant", "llama3-70b-8192", "gemma-7b-it"], key="model")
-
-    # Display messages and input box
-    display_messages()
-    st.text_input("Type your query and hit Enter", key="user_input", on_change=process_user_input, placeholder="Ask something about your documents...")
+# Function to save session data
+def save_session(session_id, data):
+    sessions[session_id] = data
     
-    # Download chat history section
-    st.subheader("💾 Download Chat History")
-    download_chat_history()
-
-    # Developer info and bug report
-    st.subheader("🐞 Bug Report")
-    st.markdown("""
-        If you encounter any bugs or issues while using the app, please send a bug report to the developer. You can include a screenshot (optional) to help identify the problem.\n
-    """)
-    st.subheader("💡 Suggestions")
-    st.markdown("""
-        Suggestions to improve the app's UI and user interface are also welcome. Feel free to reach out to the developer with your suggestions.\n
-    """)
-    st.subheader("👨‍💻 Developer Info")
-    st.markdown("""
-        **Developer**: Jatin Mehra\n
-        **Email**: jatinmehra119@gmail.com\n
-        **Mobile**: 9910364780\n
-    """)
+    # Create a copy of data that is safe to pickle
+    pickle_safe_data = {
+        "file_path": data.get("file_path"),
+        "file_name": data.get("file_name"),
+        "chunks": data.get("chunks"),
+        "chat_history": data.get("chat_history", [])
+    }
     
+    # Persist to disk
+    with open(f"{UPLOAD_DIR}/{session_id}_session.pkl", "wb") as f:
+        pickle.dump(pickle_safe_data, f)
+
+# Function to load session data
+def load_session(session_id, model_name="meta-llama/llama-4-scout-17b-16e-instruct"):
+    try:
+        # Check if session is already in memory
+        if session_id in sessions:
+            return sessions[session_id], True
+        
+        # Try to load from disk
+        file_path = f"{UPLOAD_DIR}/{session_id}_session.pkl"
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                data = pickle.load(f)
+            
+            # Recreate non-pickled objects
+            if data.get("chunks") and data.get("file_path") and os.path.exists(data["file_path"]):
+                # Recreate model, embeddings and index
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                embeddings = create_embeddings(data["chunks"], model)
+                index = build_faiss_index(embeddings)
+                
+                # Recreate LLM
+                llm = model_selection(model_name)
+                
+                # Reconstruct full session data
+                data["model"] = model
+                data["index"] = index
+                data["llm"] = llm
+                
+                # Store in memory
+                sessions[session_id] = data
+                return data, True
+        
+        return None, False
+    except Exception as e:
+        print(f"Error loading session: {str(e)}")
+        return None, False
+
+# Mount static files (we'll create these later)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Route for the home page
+@app.get("/")
+async def read_root():
+    return {"status": "ok", "message": "PDF Insight Beta API is running"}
+
+# Route to upload a PDF file
+@app.post("/upload-pdf")
+async def upload_pdf(
+    file: UploadFile = File(...), 
+    model_name: str = Form("meta-llama/llama-4-scout-17b-16e-instruct")
+):
+    # Generate a unique session ID
+    session_id = str(uuid.uuid4())
+    file_path = None
+    
+    try:
+        # Save the uploaded file
+        file_path = f"{UPLOAD_DIR}/{session_id}_{file.filename}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Check if API keys are set
+        if not os.getenv("GROQ_API_KEY"):
+            raise ValueError("GROQ_API_KEY is not set in the environment variables")
+        
+        # Process the PDF
+        text = process_pdf_file(file_path)
+        chunks = chunk_text(text, max_length=1500)
+        
+        # Create embeddings
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        embeddings = create_embeddings(chunks, model)
+        index = build_faiss_index(embeddings)
+        
+        # Initialize LLM
+        llm = model_selection(model_name)
+        
+        # Save session data
+        session_data = {
+            "file_path": file_path,
+            "file_name": file.filename,
+            "chunks": chunks,
+            "model": model,
+            "index": index,
+            "llm": llm,
+            "chat_history": []
+        }
+        save_session(session_id, session_data)
+        
+        return {"status": "success", "session_id": session_id, "message": f"Processed {file.filename}"}
+    
+    except Exception as e:
+        # Clean up on error
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            
+        error_msg = str(e)
+        stack_trace = traceback.format_exc()
+        print(f"Error processing PDF: {error_msg}")
+        print(f"Stack trace: {stack_trace}")
+        
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "detail": error_msg,
+                "type": type(e).__name__
+            }
+        )
+
+# Route to chat with the document
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    # Try to load session if not in memory
+    session, found = load_session(request.session_id, model_name=request.model_name)
+    if not found:
+        raise HTTPException(status_code=404, detail="Session not found. Please upload a document first.")
+    
+    try:
+        # Retrieve similar chunks
+        similar_chunks = retrieve_similar_chunks(
+            request.query, 
+            session["index"], 
+            session["chunks"], 
+            session["model"], 
+            k=3
+        )
+        context = "\n".join([chunk for chunk, _ in similar_chunks])
+        
+        # Generate response using agentic_rag
+        response = agentic_rag(
+            session["llm"], 
+            tools, 
+            query=request.query, 
+            context=context, 
+            Use_Tavily=request.use_search
+        )
+        
+        # Update chat history
+        session["chat_history"].append({"user": request.query, "assistant": response["output"]})
+        save_session(request.session_id, session)
+        
+        return {
+            "status": "success", 
+            "answer": response["output"],
+            "context_used": [{"text": chunk, "score": float(score)} for chunk, score in similar_chunks]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+
+# Route to get chat history
+@app.post("/chat-history")
+async def get_chat_history(request: SessionRequest):
+    # Try to load session if not in memory
+    session, found = load_session(request.session_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {
+        "status": "success", 
+        "history": session.get("chat_history", [])
+    }
+
+# Route to clear chat history
+@app.post("/clear-history")
+async def clear_history(request: SessionRequest):
+    # Try to load session if not in memory
+    session, found = load_session(request.session_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session["chat_history"] = []
+    save_session(request.session_id, session)
+    
+    return {"status": "success", "message": "Chat history cleared"}
+
+# Route to list available models
+@app.get("/models")
+async def get_models():
+    # You can expand this list as needed
+    models = [
+        {"id": "meta-llama/llama-4-scout-17b-16e-instruct", "name": "Llama 4 Scout 17B"},
+        {"id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B Instant"},
+        {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B Versatile"},
+    ]
+    return {"models": models}
+
+# Run the application if this file is executed directly
 if __name__ == "__main__":
-    main_page()
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+
