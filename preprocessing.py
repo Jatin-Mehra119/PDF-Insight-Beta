@@ -102,6 +102,7 @@ def agentic_rag(llm, tools, query, context_chunks, Use_Tavily=False):
         1. Use the provided context to answer the user's question.
         2. Provide a clear answer, if you don't know the answer, say 'I don't know'.
         3. Prioritize information from the most relevant context chunks.
+        4. Don't use based on provided context instead use Based on the Document.
         """),
         ("human", "Context: {context}\n\nQuestion: {input}"),
         MessagesPlaceholder(variable_name="chat_history"),
