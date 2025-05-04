@@ -117,7 +117,7 @@ The application follows a modular architecture with these main components:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/PDF-Insight-Beta.git
+git clone https://github.com/Jatin-Mehra119/PDF-Insight-Beta.git
 cd PDF-Insight-Beta
 ```
 
