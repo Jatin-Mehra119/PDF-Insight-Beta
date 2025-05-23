@@ -72,7 +72,7 @@ def retrieve_similar_chunks(query, index, chunks, model, k=10, max_chunk_length=
     distances, indices = index.search(query_embedding, k)
     return [(chunks[i]["text"][:max_chunk_length], distances[0][j], chunks[i]["metadata"]) for j, i in enumerate(indices[0])]
 
-def agentic_rag(llm, tools, query, context_chunks, Use_Tavily=False):
+def agentic_rag(llm, tools, query, context_chunks, memory, Use_Tavily=False):
     # Sort chunks by relevance (lower distance = more relevant)
     context_chunks = sorted(context_chunks, key=lambda x: x[1])  # Sort by distance
     context = ""
@@ -87,23 +87,37 @@ def agentic_rag(llm, tools, query, context_chunks, Use_Tavily=False):
             total_tokens += chunk_tokens
         else:
             break
+
+    # Set up the search behavior
+    search_behavior = (
+    "If the context is insufficient, *then* use the 'search' tool to find the answer."
+    if Use_Tavily
+    else "If the context is insufficient, you *must* state that you don't know."
+)
     
     # Define prompt template
-    search_instructions = (
-        "Use the search tool if the context is insufficient to answer the question or you are unsure. Give source links if you use the search tool."
-        if Use_Tavily
-        else "Use the context provided to answer the question."
-    )
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", """
-        You are a helpful assistant. {search_instructions}
-        Instructions:
-        1. Use the provided context to answer the user's question.
-        2. Provide a clear answer, if you don't know the answer, say 'I don't know'.
-        3. Prioritize information from the most relevant context chunks.
-        4. Don't use based on provided context instead use Based on the Document.
-        """),
+You are an expert Q&A system. Your primary function is to answer questions using a given set of documents (Context).
+
+**Your Process:**
+
+1.  **Analyze the Question:** Understand exactly what the user is asking.
+2.  **Scan the Context:** Thoroughly review the 'Context' provided to find relevant information.
+3.  **Formulate the Answer:**
+    * If the context contains a clear answer, synthesize it into a concise response.
+    * **Always** start your answer with "Based on the Document, ...".
+    * {search_behavior}
+    * If, after all steps, you cannot find an answer, respond with: "Based on the Document, I don't know the answer."
+4.  **Clarity:** Ensure your final answer is clear, direct, and avoids jargon if possible.
+
+**Important Rules:**
+
+* **Stick to the Context:** Unless you use the search tool, do *not* use any information outside of the provided 'Context'.
+* **No Speculation:** Do not make assumptions or infer information not explicitly present.
+* **Cite Sources (If Searching):** If you use the search tool, you MUST include the source links in your response.
+    """),
         ("human", "Context: {context}\n\nQuestion: {input}"),
         MessagesPlaceholder(variable_name="chat_history"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -116,7 +130,7 @@ def agentic_rag(llm, tools, query, context_chunks, Use_Tavily=False):
         return agent_executor.invoke({
             "input": query,
             "context": context,
-            "search_instructions": search_instructions
+            "search_behavior": search_behavior
         })
     except Exception as e:
         print(f"Error during agent execution: {str(e)}")
@@ -127,7 +141,7 @@ def agentic_rag(llm, tools, query, context_chunks, Use_Tavily=False):
         response = llm.invoke(fallback_prompt.format(context=context, input=query))
         return {"output": response.content} 
 
-if __name__ == "__main__":
+"""if __name__ == "__main__":
     # Process PDF and prepare index
     dotenv.load_dotenv()
     pdf_file = "JatinCV.pdf"
@@ -147,8 +161,8 @@ if __name__ == "__main__":
         
         # Retrieve similar chunks
         similar_chunks = retrieve_similar_chunks(query, index, chunks, model, k=3)
-        context = "\n".join([chunk for chunk, _ in similar_chunks])
+        # context = "\n".join([chunk for chunk, _ in similar_chunks])
         
         # Generate response
-        response = agentic_rag(llm, tools, query=query, context=context, Use_Tavily=True)
-        print("Assistant:", response["output"])
+        response = agentic_rag(llm, tools, query=query, context=similar_chunks, Use_Tavily=True, memory=memory)
+        print("Assistant:", response["output"])"""
