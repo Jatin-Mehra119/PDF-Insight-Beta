@@ -2,6 +2,8 @@ import os
 import dotenv
 import pickle
 import uuid
+import shutil
+import traceback
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,8 +21,6 @@ from preprocessing import (
     tools
 )
 from sentence_transformers import SentenceTransformer
-import shutil
-import traceback
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -76,36 +76,57 @@ def load_session(session_id, model_name="meta-llama/llama-4-scout-17b-16e-instru
     try:
         # Check if session is already in memory
         if session_id in sessions:
+            # Ensure the LLM in the cached session matches the requested model_name
+            # If not, update it. This handles cases where model_name might change for an existing session.
+            if sessions[session_id].get("llm") is None or sessions[session_id]["llm"].model_name != model_name:
+                try:
+                    sessions[session_id]["llm"] = model_selection(model_name)
+                except Exception as e:
+                    print(f"Error updating LLM for in-memory session {session_id} to {model_name}: {str(e)}")
+                    # Decide if this is a critical error; for now, we'll proceed with the old LLM or handle as error
+                    # For simplicity, if LLM update fails, we might want to indicate session load failure or use existing.
+                    # Here, we'll let it proceed, but this could be a point of further refinement.
             return sessions[session_id], True
         
         # Try to load from disk
-        file_path = f"{UPLOAD_DIR}/{session_id}_session.pkl"
-        if os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                data = pickle.load(f)
+        file_path_pkl = f"{UPLOAD_DIR}/{session_id}_session.pkl"
+        if os.path.exists(file_path_pkl):
+            with open(file_path_pkl, "rb") as f:
+                data = pickle.load(f)  # This is pickle_safe_data
             
             # Recreate non-pickled objects
-            if data.get("chunks") and data.get("file_path") and os.path.exists(data["file_path"]):
-                # Recreate model, embeddings and index
-                model = SentenceTransformer('BAAI/bge-large-en-v1.5')
-                embeddings, _ = create_embeddings(data["chunks"], model)  # Unpack tuple
-                index = build_faiss_index(embeddings)
-                
-                # Recreate LLM
-                llm = model_selection(model_name)
-                
-                # Reconstruct full session data
-                data["model"] = model
-                data["index"] = index
-                data["llm"] = llm
-                
-                # Store in memory
-                sessions[session_id] = data
-                return data, True
+            # Ensure 'chunks' and 'file_path' (for the original PDF) are present in the loaded data
+            # and the original PDF file still exists.
+            original_pdf_path = data.get("file_path")
+            if data.get("chunks") and original_pdf_path and os.path.exists(original_pdf_path):
+                embedding_model_instance = SentenceTransformer('BAAI/bge-large-en-v1.5')
+                # data["chunks"] is already the list of dicts: {text: ..., metadata: ...}
+                recreated_embeddings, _ = create_embeddings(data["chunks"], embedding_model_instance)
+                recreated_index = build_faiss_index(recreated_embeddings)
+                recreated_llm = model_selection(model_name)
+
+                full_session_data = {
+                    "file_path": original_pdf_path,
+                    "file_name": data.get("file_name"),
+                    "chunks": data.get("chunks"),  # These are chunks_with_metadata
+                    "chat_history": data.get("chat_history", []),
+                    "model": embedding_model_instance,    # SentenceTransformer model
+                    "index": recreated_index,            # FAISS index
+                    "llm": recreated_llm                 # LLM
+                }
+                sessions[session_id] = full_session_data  # Store in memory cache
+                return full_session_data, True
+            else:
+                # If essential data for reconstruction is missing from pickle or the original PDF is gone
+                print(f"Warning: Session data for {session_id} is incomplete or its PDF file '{original_pdf_path}' is missing. Cannot reconstruct session.")
+                # Optionally, remove the stale .pkl file
+                # os.remove(file_path_pkl) 
+                return None, False
         
-        return None, False
+        return None, False  # Session not in memory and not found on disk, or reconstruction failed
     except Exception as e:
-        print(f"Error loading session: {str(e)}")
+        print(f"Error loading session {session_id}: {str(e)}")
+        print(traceback.format_exc()) # Print full traceback for debugging
         return None, False
 
 # Function to remove PDF file
@@ -165,7 +186,7 @@ async def upload_pdf(
         
         # Process the PDF
         documents = process_pdf_file(file_path)  # Returns list of Document objects
-        chunks = chunk_text(documents, max_length=1000)  # Updated to handle documents
+        chunks = chunk_text(documents, max_length=1500)  # Updated to handle documents
         
         # Create embeddings
         model = SentenceTransformer('BAAI/bge-large-en-v1.5')  # Updated embedding model
@@ -219,6 +240,14 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=404, detail="Session not found. Please upload a document first.")
     
     try:
+        from langchain.memory import ConversationBufferMemory
+        agent_memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
+        for entry in session.get("chat_history", []):
+            agent_memory.chat_memory.add_user_message(entry["user"])
+            agent_memory.chat_memory.add_ai_message(entry["assistant"])
+        
+
         # Retrieve similar chunks
         similar_chunks = retrieve_similar_chunks(
             request.query, 
@@ -234,7 +263,8 @@ async def chat(request: ChatRequest):
             tools, 
             query=request.query, 
             context_chunks=similar_chunks,  # Pass the list of tuples
-            Use_Tavily=request.use_search
+            Use_Tavily=request.use_search,
+            memory=agent_memory
         )
         
         # Update chat history
