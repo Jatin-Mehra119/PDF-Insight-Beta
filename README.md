@@ -6,6 +6,7 @@ An advanced PDF document analysis tool that combines RAG (Retrieval Augmented Ge
 
 - [Overview](#overview)
 - [Features](#features)
+- [RAG SYSTEM PERFORMANCE](#rag-system-metrics)
 - [Architecture](#architecture)
 - [Technical Stack](#technical-stack)
 - [Installation](#installation)
@@ -33,6 +34,39 @@ The application employs an agentic approach that can augment the document's info
 - **Docker Containerization**: Easy deployment with containerized application
 - **Hugging Face Integration**: Automatic deployment to Hugging Face Spaces
 - **Android Application**: Native mobile client
+
+
+## RAG System Metrics
+
+1. **Key Metrics Overview**:
+
+| Metric                              | Value   |
+| ----------------------------------- | ------- |
+| **Semantic Similarity (Mean)**      | `0.852` |
+| **ROUGE-L F1 Score (Mean)**         | `0.395` |
+| **Semantic Similarity (Max)**       | `1.000` |
+| **ROUGE-L F1 Score (Max)**          | `1.000` |
+| **Semantic Similarity (Min)**       | `0.592` |
+| **ROUGE-L F1 Score (Min)**          | `0.099` |
+| **Standard Deviation (Similarity)** | `0.089` |
+| **Standard Deviation (ROUGE-L F1)** | `0.217` |
+
+
+2. **Quantile Distribution**:
+
+| Percentile | Semantic Similarity | ROUGE-L F1 Score |
+| ---------- | ------------------- | ---------------- |
+| **25%**    | `0.7946`            | `0.2516`         |
+| **50%**    | `0.8732`            | `0.3256`         |
+| **75%**    | `0.9181`            | `0.4951`         |
+
+
+3. **Evaluation Status**:
+
+| Status | Count | Percentage |
+| ------ | ----- | ---------- |
+| PASS | `64`  | `85.3%`    |
+| FAIL | `11`  | `14.7%`    |
 
 ## Architecture
 
