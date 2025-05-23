@@ -11,3 +11,4 @@ pydantic
 faiss-cpu
 sentence-transformers
 tavily-python
+rouge-score
