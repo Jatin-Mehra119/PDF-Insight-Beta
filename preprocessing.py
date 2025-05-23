@@ -8,6 +8,8 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 from sentence_transformers import SentenceTransformer
 import dotenv
+from langchain.tools import tool
+import traceback
 dotenv.load_dotenv()
 # Initialize LLM and tools globally
 
@@ -66,80 +68,133 @@ def build_faiss_index(embeddings):
     index.add(embeddings)
     return index
 
-def retrieve_similar_chunks(query, index, chunks, model, k=10, max_chunk_length=1000):
+def retrieve_similar_chunks(query, index, chunks_with_metadata, embedding_model, k=10, max_chunk_length=1000):
     """Retrieve top k similar chunks to the query from the FAISS index."""
-    query_embedding = model.encode([query], convert_to_tensor=True).cpu().numpy()
+    query_embedding = embedding_model.encode([query], convert_to_tensor=True).cpu().numpy()
     distances, indices = index.search(query_embedding, k)
-    return [(chunks[i]["text"][:max_chunk_length], distances[0][j], chunks[i]["metadata"]) for j, i in enumerate(indices[0])]
+    
+    # Ensure indices are within bounds of chunks_with_metadata
+    valid_indices = [i for i in indices[0] if 0 <= i < len(chunks_with_metadata)]
+    
+    return [
+        (chunks_with_metadata[i]["text"][:max_chunk_length], distances[0][j], chunks_with_metadata[i]["metadata"])
+        for j, i in enumerate(valid_indices) # Use valid_indices
+    ]
 
-def agentic_rag(llm, tools, query, context_chunks, memory, Use_Tavily=False):
+
+def create_vector_search_tool(faiss_index, document_chunks_with_metadata, embedding_model, k=3, max_chunk_length=1000):
+    @tool
+    def vector_database_search(query: str) -> str:
+        """
+        Searches the currently uploaded PDF document for information semantically similar to the query.
+        Use this tool when the user's question is likely answerable from the content of the specific document they provided.
+        Input should be the search query.
+        """
+        # Retrieve similar chunks using the provided session-specific components
+        similar_chunks_data = retrieve_similar_chunks(
+            query,
+            faiss_index,
+            document_chunks_with_metadata, # This is the list of dicts {text: ..., metadata: ...}
+            embedding_model,
+            k=k,
+            max_chunk_length=max_chunk_length
+        )
+        # Format the response
+        if not similar_chunks_data:
+            return "No relevant information found in the document for that query."
+        
+        context = "\n\n---\n\n".join([chunk_text for chunk_text, _, _ in similar_chunks_data])
+        return f"The following information was found in the document regarding '{query}':\n{context}"
+
+    return vector_database_search
+
+def agentic_rag(llm, agent_specific_tools, query, context_chunks, memory, Use_Tavily=False): # Renamed 'tools' to 'agent_specific_tools'
     # Sort chunks by relevance (lower distance = more relevant)
-    context_chunks = sorted(context_chunks, key=lambda x: x[1])  # Sort by distance
+    context_chunks = sorted(context_chunks, key=lambda x: x[1]) if context_chunks else []
     context = ""
     total_tokens = 0
     max_tokens = 7000  # Leave room for prompt and response
-    
-    # Aggregate relevant chunks until token limit is reached
-    for chunk, _, _ in context_chunks:  # Unpack three elements
+
+    for chunk, _, _ in context_chunks:
         chunk_tokens = estimate_tokens(chunk)
         if total_tokens + chunk_tokens <= max_tokens:
             context += chunk + "\n\n"
             total_tokens += chunk_tokens
         else:
             break
+    
+    context = context.strip() if context else "No initial context provided from preliminary search."
 
-    # Set up the search behavior
-    search_behavior = (
-    "If the context is insufficient, *then* use the 'search' tool to find the answer."
-    if Use_Tavily
-    else "If the context is insufficient, you *must* state that you don't know."
-)
-    
-    # Define prompt template
-    
+
+    # Dynamically build the tool guidance for the prompt
+    # Tool names: 'vector_database_search', 'tavily_search_results_json'
+    has_document_search = any(t.name == "vector_database_search" for t in agent_specific_tools)
+    has_web_search = any(t.name == "tavily_search_results_json" for t in agent_specific_tools)
+
+    guidance_parts = []
+    if has_document_search:
+        guidance_parts.append(
+            "If the direct context (if any from preliminary search) is insufficient and the question seems answerable from the uploaded document, "
+            "use the 'vector_database_search' tool to find relevant information within the document."
+        )
+    if has_web_search: # Tavily tool would only be in agent_specific_tools if Use_Tavily was true
+        guidance_parts.append(
+            "If the information is not found in the document (after using 'vector_database_search' if appropriate) "
+            "or the question is of a general nature not specific to the document, "
+            "use the 'tavily_search_results_json' tool for web searches."
+        )
+
+    if not guidance_parts:
+        search_behavior_instructions = "If the context is insufficient, you *must* state that you don't know."
+    else:
+        search_behavior_instructions = " ".join(guidance_parts)
+        search_behavior_instructions += ("\n    * If, after all steps and tool use (if any), you cannot find an answer, "
+                                         "respond with: \"Based on the available information, I don't know the answer.\"")
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """
-You are an expert Q&A system. Your primary function is to answer questions using a given set of documents (Context).
+        ("system", f"""
+You are an expert Q&A system. Your primary function is to answer questions using a given set of documents (Context) and available tools.
 
 **Your Process:**
 
 1.  **Analyze the Question:** Understand exactly what the user is asking.
-2.  **Scan the Context:** Thoroughly review the 'Context' provided to find relevant information.
+2.  **Scan the Context:** Thoroughly review the 'Context' provided (if any) to find relevant information. This context is derived from a preliminary similarity search in the document.
 3.  **Formulate the Answer:**
-    * If the context contains a clear answer, synthesize it into a concise response.
-    * **Always** start your answer with "Based on the Document, ...".
-    * {search_behavior}
-    * If, after all steps, you cannot find an answer, respond with: "Based on the Document, I don't know the answer."
+    * If the initially provided context contains a clear answer, synthesize it into a concise response. Start your answer with "Based on the Document, ...".
+    * {search_behavior_instructions}
+    * When using the 'vector_database_search' tool, the information comes from the document. Prepend your answer with "Based on the Document, ...".
+    * When using the 'tavily_search_results_json' tool, the information comes from the web. Prepend your answer with "According to a web search, ...". If no useful information is found, state that.
 4.  **Clarity:** Ensure your final answer is clear, direct, and avoids jargon if possible.
 
 **Important Rules:**
 
-* **Stick to the Context:** Unless you use the search tool, do *not* use any information outside of the provided 'Context'.
+* **Stick to Sources:** Do *not* use any information outside of the provided 'Context', document search results ('vector_database_search'), or web search results ('tavily_search_results_json').
 * **No Speculation:** Do not make assumptions or infer information not explicitly present.
-* **Cite Sources (If Searching):** If you use the search tool, you MUST include the source links in your response.
-    """),
-        ("human", "Context: {context}\n\nQuestion: {input}"),
+* **Cite Sources (If Web Searching):** If you use the 'tavily_search_results_json' tool and it provides source links, you MUST include them in your response.
+        """),
+        ("human", "Context: {{context}}\n\nQuestion: {{input}}"), # Double braces for f-string in f-string
         MessagesPlaceholder(variable_name="chat_history"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
     
-    agent_tools = tools if Use_Tavily else []
     try:
-        agent = create_tool_calling_agent(llm, agent_tools, prompt)
-        agent_executor = AgentExecutor(agent=agent, tools=agent_tools, memory=memory, verbose=True)
-        return agent_executor.invoke({
+        agent = create_tool_calling_agent(llm, agent_specific_tools, prompt)
+        agent_executor = AgentExecutor(agent=agent, tools=agent_specific_tools, memory=memory, verbose=True)
+        response_payload = agent_executor.invoke({
             "input": query,
             "context": context,
-            "search_behavior": search_behavior
         })
+        return response_payload # Expecting dict like {'output': '...'}
     except Exception as e:
-        print(f"Error during agent execution: {str(e)}")
-        fallback_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant. Use the provided context to answer the user's question."),
+        print(f"Error during agent execution: {str(e)} \nTraceback: {traceback.format_exc()}")
+        fallback_prompt_template = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant. Use the provided context to answer the user's question. If the context is insufficient, say you don't know."),
             ("human", "Context: {context}\n\nQuestion: {input}")
         ])
-        response = llm.invoke(fallback_prompt.format(context=context, input=query))
-        return {"output": response.content} 
+        # Format the prompt with the actual context and query
+        formatted_fallback_prompt = fallback_prompt_template.format_prompt(context=context, input=query).to_messages()
+        response = llm.invoke(formatted_fallback_prompt)
+        return {"output": response.content if hasattr(response, 'content') else str(response)} 
 
 """if __name__ == "__main__":
     # Process PDF and prepare index
