@@ -14,13 +14,32 @@ dotenv.load_dotenv()
 # Initialize LLM and tools globally
 
 def model_selection(model_name):
-    llm = ChatGroq(model=model_name, api_key=os.getenv("GROQ_API_KEY"))
+    llm = ChatGroq(
+        model=model_name, 
+        api_key=os.getenv("GROQ_API_KEY"),
+        temperature=0.1,  # Lower temperature for more consistent tool calling
+        max_tokens=2048   # Reasonable limit for responses
+    )
     return llm
     
-tools = [TavilySearchResults(max_results=5)]
+# Create tools with better error handling
+def create_tavily_tool():
+    try:
+        return TavilySearchResults(
+            max_results=5,
+            search_depth="advanced",
+            include_answer=True,
+            include_raw_content=False
+        )
+    except Exception as e:
+        print(f"Warning: Could not create Tavily tool: {e}")
+        return None
 
-# Initialize memory for conversation history
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+# Initialize tools globally but with error handling
+_tavily_tool = create_tavily_tool()
+tools = [_tavily_tool] if _tavily_tool else []
+
+# Note: Memory should be created per session, not globally
 
 def estimate_tokens(text):
     """Estimate the number of tokens in a text (rough approximation)."""
@@ -44,12 +63,19 @@ def chunk_text(documents, max_length=1000):
         current_chunk = ""
         current_metadata = metadata.copy()
         for paragraph in paragraphs:
+            # Skip very short paragraphs (less than 10 characters)
+            if len(paragraph.strip()) < 10:
+                continue
+                
             if estimate_tokens(current_chunk + paragraph) <= max_length // 4:
                 current_chunk += paragraph + "\n\n"
             else:
-                chunks.append({"text": current_chunk.strip(), "metadata": current_metadata})
+                # Only add chunks with meaningful content
+                if current_chunk.strip() and len(current_chunk.strip()) > 20:
+                    chunks.append({"text": current_chunk.strip(), "metadata": current_metadata})
                 current_chunk = paragraph + "\n\n"
-        if current_chunk:
+        # Add the last chunk if it has meaningful content
+        if current_chunk.strip() and len(current_chunk.strip()) > 20:
             chunks.append({"text": current_chunk.strip(), "metadata": current_metadata})
     return chunks
 
@@ -73,57 +99,109 @@ def retrieve_similar_chunks(query, index, chunks_with_metadata, embedding_model,
     query_embedding = embedding_model.encode([query], convert_to_tensor=True).cpu().numpy()
     distances, indices = index.search(query_embedding, k)
     
-    # Ensure indices are within bounds of chunks_with_metadata
-    valid_indices = [i for i in indices[0] if 0 <= i < len(chunks_with_metadata)]
+    # Ensure indices are within bounds and create mapping for correct distances
+    valid_results = []
+    for idx_pos, chunk_idx in enumerate(indices[0]):
+        if 0 <= chunk_idx < len(chunks_with_metadata):
+            chunk_text = chunks_with_metadata[chunk_idx]["text"][:max_chunk_length]
+            # Only include chunks with meaningful content
+            if chunk_text.strip():  # Skip empty chunks
+                valid_results.append((
+                    chunk_text,
+                    distances[0][idx_pos],  # Use original position for correct distance
+                    chunks_with_metadata[chunk_idx]["metadata"]
+                ))
     
-    return [
-        (chunks_with_metadata[i]["text"][:max_chunk_length], distances[0][j], chunks_with_metadata[i]["metadata"])
-        for j, i in enumerate(valid_indices) # Use valid_indices
-    ]
+    return valid_results
 
 
 def create_vector_search_tool(faiss_index, document_chunks_with_metadata, embedding_model, k=3, max_chunk_length=1000):
     @tool
     def vector_database_search(query: str) -> str:
-        """
-        Searches the currently uploaded PDF document for information semantically similar to the query.
-        Use this tool when the user's question is likely answerable from the content of the specific document they provided.
-        Input should be the search query.
-        """
-        # Retrieve similar chunks using the provided session-specific components
-        similar_chunks_data = retrieve_similar_chunks(
-            query,
-            faiss_index,
-            document_chunks_with_metadata, # This is the list of dicts {text: ..., metadata: ...}
-            embedding_model,
-            k=k,
-            max_chunk_length=max_chunk_length
-        )
-        # Format the response
-        if not similar_chunks_data:
-            return "No relevant information found in the document for that query."
+        """Search the uploaded PDF document for information related to the query.
         
-        context = "\n\n---\n\n".join([chunk_text for chunk_text, _, _ in similar_chunks_data])
-        return f"The following information was found in the document regarding '{query}':\n{context}"
+        Args:
+            query: The search query string to find relevant information in the document.
+            
+        Returns:
+            A string containing relevant information found in the document.
+        """
+        # Handle very short or empty queries
+        if not query or len(query.strip()) < 3:
+            return "Please provide a more specific search query with at least 3 characters."
+        
+        try:
+            # Retrieve similar chunks using the provided session-specific components
+            similar_chunks_data = retrieve_similar_chunks(
+                query,
+                faiss_index,
+                document_chunks_with_metadata, # This is the list of dicts {text: ..., metadata: ...}
+                embedding_model,
+                k=k,
+                max_chunk_length=max_chunk_length
+            )
+            
+            # Format the response
+            if not similar_chunks_data:
+                return "No relevant information found in the document for that query. Please try rephrasing your question or using different keywords."
+            
+            # Filter out chunks with very high distance (low similarity)
+            filtered_chunks = [chunk for chunk in similar_chunks_data if chunk[1] < 1.5]  # Adjust threshold as needed
+            
+            if not filtered_chunks:
+                return "No sufficiently relevant information found in the document for that query. Please try rephrasing your question or using different keywords."
+            
+            context = "\n\n---\n\n".join([chunk_text for chunk_text, _, _ in filtered_chunks])
+            return f"The following information was found in the document regarding '{query}':\n{context}"
+            
+        except Exception as e:
+            print(f"Error in vector search tool: {e}")
+            return f"Error searching the document: {str(e)}"
 
     return vector_database_search
 
-def agentic_rag(llm, agent_specific_tools, query, context_chunks, memory, Use_Tavily=False): # Renamed 'tools' to 'agent_specific_tools'
+def agentic_rag(llm, agent_specific_tools, query, context_chunks, memory, Use_Tavily=False):
+    # Validate inputs
+    if not query or not query.strip():
+        return {"output": "Please provide a valid question."}
+    
+    if not agent_specific_tools:
+        print("Warning: No tools provided, using direct LLM response")
+        # Use direct LLM call without agent if no tools
+        fallback_prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant that answers questions about documents. Use the provided context to answer the user's question."),
+            ("human", "Context: {context}\n\nQuestion: {input}")
+        ])
+        try:
+            formatted_prompt = fallback_prompt.format_prompt(context="No context available", input=query).to_messages()
+            response = llm.invoke(formatted_prompt)
+            return {"output": response.content if hasattr(response, 'content') else str(response)}
+        except Exception as e:
+            print(f"Direct LLM call failed: {e}")
+            return {"output": "I'm sorry, I encountered an error processing your request."}
+    
+    print(f"Available tools: {[tool.name for tool in agent_specific_tools]}")
+    
     # Sort chunks by relevance (lower distance = more relevant)
     context_chunks = sorted(context_chunks, key=lambda x: x[1]) if context_chunks else []
     context = ""
     total_tokens = 0
     max_tokens = 7000  # Leave room for prompt and response
 
-    for chunk, _, _ in context_chunks:
-        chunk_tokens = estimate_tokens(chunk)
-        if total_tokens + chunk_tokens <= max_tokens:
-            context += chunk + "\n\n"
-            total_tokens += chunk_tokens
-        else:
-            break
+    # Filter out chunks with very high distance scores (low similarity)
+    relevant_chunks = [chunk for chunk in context_chunks if len(chunk) >= 3 and chunk[1] < 1.5]
+
+    for chunk, _, _ in relevant_chunks:
+        if chunk and chunk.strip():  # Ensure chunk has content
+            chunk_tokens = estimate_tokens(chunk)
+            if total_tokens + chunk_tokens <= max_tokens:
+                context += chunk + "\n\n"
+                total_tokens += chunk_tokens
+            else:
+                break
     
     context = context.strip() if context else "No initial context provided from preliminary search."
+    print(f"Using context length: {len(context)} characters")
 
 
     # Dynamically build the tool guidance for the prompt
@@ -131,70 +209,168 @@ def agentic_rag(llm, agent_specific_tools, query, context_chunks, memory, Use_Ta
     has_document_search = any(t.name == "vector_database_search" for t in agent_specific_tools)
     has_web_search = any(t.name == "tavily_search_results_json" for t in agent_specific_tools)
 
-    guidance_parts = []
+    # Simplified tool guidance
+    tool_instructions = ""
     if has_document_search:
-        guidance_parts.append(
-            "If the direct context (if any from preliminary search) is insufficient and the question seems answerable from the uploaded document, "
-            "use the 'vector_database_search' tool to find relevant information within the document."
-        )
-    if has_web_search: # Tavily tool would only be in agent_specific_tools if Use_Tavily was true
-        guidance_parts.append(
-            "If the information is not found in the document (after using 'vector_database_search' if appropriate) "
-            "or the question is of a general nature not specific to the document, "
-            "use the 'tavily_search_results_json' tool for web searches."
-        )
-
-    if not guidance_parts:
-        search_behavior_instructions = "If the context is insufficient, you *must* state that you don't know."
-    else:
-        search_behavior_instructions = " ".join(guidance_parts)
-        search_behavior_instructions += ("\n    * If, after all steps and tool use (if any), you cannot find an answer, "
-                                         "respond with: \"Based on the available information, I don't know the answer.\"")
+        tool_instructions += "Use vector_database_search to find information in the uploaded document. "
+    if has_web_search:
+        tool_instructions += "Use tavily_search_results_json for web searches when document search is insufficient. "
+    
+    if not tool_instructions:
+        tool_instructions = "Answer based on the provided context only. "
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""
-You are an expert Q&A system. Your primary function is to answer questions using a given set of documents (Context) and available tools.
+        ("system", f"""You are a helpful AI assistant that answers questions about documents.
 
-**Your Process:**
+Context: {{context}}
 
-1.  **Analyze the Question:** Understand exactly what the user is asking.
-2.  **Scan the Context:** Thoroughly review the 'Context' provided (if any) to find relevant information. This context is derived from a preliminary similarity search in the document.
-3.  **Formulate the Answer:**
-    * If the initially provided context contains a clear answer, synthesize it into a concise response. Start your answer with "Based on the Document, ...".
-    * {search_behavior_instructions}
-    * When using the 'vector_database_search' tool, the information comes from the document. Prepend your answer with "Based on the Document, ...".
-    * When using the 'tavily_search_results_json' tool, the information comes from the web. Prepend your answer with "According to a web search, ...". If no useful information is found, state that.
-4.  **Clarity:** Ensure your final answer is clear, direct, and avoids jargon if possible.
+Tools available: {tool_instructions}
 
-**Important Rules:**
-
-* **Stick to Sources:** Do *not* use any information outside of the provided 'Context', document search results ('vector_database_search'), or web search results ('tavily_search_results_json').
-* **No Speculation:** Do not make assumptions or infer information not explicitly present.
-* **Cite Sources (If Web Searching):** If you use the 'tavily_search_results_json' tool and it provides source links, you MUST include them in your response.
-        """),
-        ("human", "Context: {{context}}\n\nQuestion: {{input}}"), # Double braces for f-string in f-string
+Instructions:
+- Use the provided context first
+- If context is insufficient, use available tools to search for more information
+- Provide clear, helpful answers
+- If you cannot find an answer, say so clearly"""),
+        ("human", "{input}"),
         MessagesPlaceholder(variable_name="chat_history"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
     
     try:
+        print(f"Creating agent with {len(agent_specific_tools)} tools")
+        
+        # Validate that tools are properly formatted
+        for tool in agent_specific_tools:
+            print(f"Tool: {tool.name} - {type(tool)}")
+            # Ensure tool has required attributes
+            if not hasattr(tool, 'name') or not hasattr(tool, 'description'):
+                raise ValueError(f"Tool {tool} is missing required attributes")
+        
         agent = create_tool_calling_agent(llm, agent_specific_tools, prompt)
-        agent_executor = AgentExecutor(agent=agent, tools=agent_specific_tools, memory=memory, verbose=True)
-        response_payload = agent_executor.invoke({
+        agent_executor = AgentExecutor(
+            agent=agent, 
+            tools=agent_specific_tools, 
+            memory=memory, 
+            verbose=True,
+            handle_parsing_errors=True,
+            max_iterations=2,  # Reduced further to prevent issues
+            return_intermediate_steps=False,
+            early_stopping_method="generate"
+        )
+        
+        print(f"Invoking agent with query: '{query}' and context length: {len(context)} chars")
+        
+        # Create input with simpler structure
+        agent_input = {
             "input": query,
             "context": context,
-        })
-        return response_payload # Expecting dict like {'output': '...'}
+        }
+        
+        response_payload = agent_executor.invoke(agent_input)
+        
+        print(f"Agent response keys: {response_payload.keys() if response_payload else 'None'}")
+        
+        # Extract and validate the output
+        agent_output = response_payload.get("output", "") if response_payload else ""
+        print(f"Agent output length: {len(agent_output)} chars")
+        print(f"Agent output preview: {agent_output[:100]}..." if len(agent_output) > 100 else f"Agent output: {agent_output}")
+        
+        # Validate response quality
+        if not agent_output or len(agent_output.strip()) < 10:
+            print(f"Warning: Agent returned insufficient response (length: {len(agent_output)}), using fallback")
+            raise ValueError("Insufficient response from agent")
+        
+        # Check if response is just a prefix without content
+        problematic_prefixes = [
+            "Based on the Document,",
+            "According to a web search,", 
+            "Based on the available information,",
+            "I need to",
+            "Let me"
+        ]
+        
+        stripped_output = agent_output.strip()
+        if any(stripped_output == prefix.strip() or stripped_output == prefix.strip() + "." for prefix in problematic_prefixes):
+            print(f"Warning: Agent returned only prefix without content: '{stripped_output}', using fallback")
+            raise ValueError("Agent returned incomplete response")
+            
+        return response_payload
     except Exception as e:
-        print(f"Error during agent execution: {str(e)} \nTraceback: {traceback.format_exc()}")
+        error_msg = str(e)
+        print(f"Error during agent execution: {error_msg} \nTraceback: {traceback.format_exc()}")
+        
+        # Check if it's a specific Groq function calling error
+        if "Failed to call a function" in error_msg or "function" in error_msg.lower():
+            print("Detected Groq function calling error, trying simpler approach...")
+            
+            # Try with a simpler agent setup or direct LLM call
+            try:
+                # First, try to use tools individually without agent framework
+                if agent_specific_tools:
+                    print("Attempting manual tool usage...")
+                    tool_results = []
+                    
+                    # Try vector search first if available
+                    vector_tool = next((t for t in agent_specific_tools if t.name == "vector_database_search"), None)
+                    if vector_tool:
+                        try:
+                            search_result = vector_tool.run(query)
+                            if search_result and "No relevant information" not in search_result:
+                                tool_results.append(f"Document Search: {search_result}")
+                        except Exception as tool_error:
+                            print(f"Vector tool error: {tool_error}")
+                    
+                    # Try web search if needed and available
+                    if Use_Tavily:
+                        web_tool = next((t for t in agent_specific_tools if t.name == "tavily_search_results_json"), None)
+                        if web_tool:
+                            try:
+                                web_result = web_tool.run(query)
+                                if web_result:
+                                    tool_results.append(f"Web Search: {web_result}")
+                            except Exception as tool_error:
+                                print(f"Web tool error: {tool_error}")
+                    
+                    # Combine tool results with context
+                    enhanced_context = context
+                    if tool_results:
+                        enhanced_context += "\n\nAdditional Information:\n" + "\n\n".join(tool_results)
+                    
+                    # Use direct LLM call with enhanced context
+                    direct_prompt = ChatPromptTemplate.from_messages([
+                        ("system", "You are a helpful assistant. Use the provided context and information to answer the user's question clearly and completely."),
+                        ("human", "Context and Information: {context}\n\nQuestion: {input}")
+                    ])
+                    
+                    formatted_prompt = direct_prompt.format_prompt(context=enhanced_context, input=query).to_messages()
+                    response = llm.invoke(formatted_prompt)
+                    direct_output = response.content if hasattr(response, 'content') else str(response)
+                    print(f"Direct tool usage response length: {len(direct_output)} chars")
+                    return {"output": direct_output}
+                    
+            except Exception as manual_error:
+                print(f"Manual tool usage also failed: {manual_error}")
+        
+        print("Using fallback direct LLM response...")
+        
         fallback_prompt_template = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant. Use the provided context to answer the user's question. If the context is insufficient, say you don't know."),
+            ("system", """You are a helpful assistant that answers questions about documents. 
+            Use the provided context to answer the user's question. 
+            If the context contains relevant information, start your answer with "Based on the Document, ..."
+            If the context is insufficient, clearly state what you don't know."""),
             ("human", "Context: {context}\n\nQuestion: {input}")
         ])
-        # Format the prompt with the actual context and query
-        formatted_fallback_prompt = fallback_prompt_template.format_prompt(context=context, input=query).to_messages()
-        response = llm.invoke(formatted_fallback_prompt)
-        return {"output": response.content if hasattr(response, 'content') else str(response)} 
+        
+        try:
+            # Format the prompt with the actual context and query
+            formatted_fallback_prompt = fallback_prompt_template.format_prompt(context=context, input=query).to_messages()
+            response = llm.invoke(formatted_fallback_prompt)
+            fallback_output = response.content if hasattr(response, 'content') else str(response)
+            print(f"Fallback response length: {len(fallback_output)} chars")
+            return {"output": fallback_output}
+        except Exception as fallback_error:
+            print(f"Fallback also failed: {str(fallback_error)}")
+            return {"output": "I'm sorry, I encountered an error processing your request. Please try again."} 
 
 """if __name__ == "__main__":
     # Process PDF and prepare index
