@@ -39,7 +39,7 @@ def test_imports():
         print("✓ API module imported successfully")
         
         # Test backward compatibility
-        from preprocessing_refactored import model_selection, chunk_text, agentic_rag
+        from preprocessing import model_selection, chunk_text, agentic_rag
         print("✓ Backward compatibility import successful")
         
         return True
@@ -85,7 +85,7 @@ def test_backward_compatibility():
     
     try:
         # Test original preprocessing interface
-        from preprocessing_refactored import model_selection, tools, estimate_tokens
+        from preprocessing import model_selection, tools, estimate_tokens
         
         # These should work without errors
         assert callable(model_selection)
@@ -95,7 +95,7 @@ def test_backward_compatibility():
         print("✓ Original preprocessing interface preserved")
         
         # Test that we can still access the original functions
-        from preprocessing_refactored import (
+        from preprocessing import (
             process_pdf_file, chunk_text, create_embeddings,
             build_faiss_index, retrieve_similar_chunks, agentic_rag
         )
@@ -114,7 +114,7 @@ def test_app_creation():
     print("\nTesting app creation...")
     
     try:
-        from app_refactored import create_app
+        from app import create_app
         
         app = create_app()
         assert app is not None
