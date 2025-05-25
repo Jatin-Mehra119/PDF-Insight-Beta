@@ -4,7 +4,7 @@ ds = load_dataset("neural-bridge/rag-dataset-12000")
 
 # Test the RAG system with DS dataset
 from sentence_transformers import SentenceTransformer
-from preprocessing import model_selection, create_embeddings, build_faiss_index, retrieve_similar_chunks, agentic_rag
+from development_scripts.preprocessing import model_selection, create_embeddings, build_faiss_index, retrieve_similar_chunks, agentic_rag
 import dotenv
 from langchain_community.tools.tavily_search import TavilySearchResults
 import json 
