@@ -114,6 +114,109 @@ The application follows a modular architecture with these main components:
    - Response is returned to the user
    - Chat history is updated and persisted
 
+## Project Structure
+
+The project is organized into a modular architecture with clear separation of concerns:
+
+```
+PDF-Insight-Beta/
+├── app.py                      # Main FastAPI application entry point
+├── gen_dataset.py             # Dataset generation and RAG evaluation scripts
+├── test_RAG.ipynb            # Jupyter notebook for RAG system testing and metrics
+├── requirements.txt           # Python dependencies
+├── Dockerfile                 # Container configuration for deployment
+├── LICENSE                    # MIT license file
+├── README.md                 # Project documentation
+├── README_hf.md              # Hugging Face Spaces specific documentation
+├──
+├── api/                       # API route handlers (modular FastAPI routes)
+│   ├── __init__.py           # Exports all route handlers
+│   ├── chat_routes.py        # Chat and conversation management endpoints
+│   ├── session_routes.py     # Session lifecycle management
+│   ├── upload_routes.py      # PDF upload and processing endpoints
+│   └── utility_routes.py     # Utility endpoints (models, health checks)
+├──
+├── configs/                   # Configuration management
+│   └── config.py             # Centralized configuration and environment variables
+├──
+├── models/                    # Pydantic data models
+│   └── models.py             # Request/response models for API validation
+├──
+├── services/                  # Core business logic services
+│   ├── __init__.py           # Service module initialization
+│   ├── llm_service.py        # Language model integration and management
+│   ├── rag_service.py        # RAG implementation with agentic capabilities
+│   └── session_service.py    # Session persistence and management
+├──
+├── utils/                     # Utility functions and helpers
+│   ├── __init__.py           # Utility module initialization
+│   ├── faiss_utils.py        # FAISS vector database operations
+│   ├── session_utils.py      # Session data serialization/deserialization
+│   └── text_processing.py    # PDF text extraction and chunking utilities
+├──
+├── static/                    # Frontend web application
+│   ├── index.html            # Main web interface
+│   ├── css/
+│   │   └── styles.css        # Application styling and responsive design
+│   └── js/
+│       └── app.js            # Frontend JavaScript for user interactions
+├──
+├── development_scripts/       # Legacy and development utilities
+│   ├── app.py               # Original monolithic application (deprecated)
+│   └── preprocessing.py      # Original preprocessing functions (deprecated)
+├──
+├── uploads/                   # Temporary storage for uploaded files and sessions
+│   ├── *.pdf                # Uploaded PDF documents
+│   └── *_session.pkl        # Serialized session data
+├──
+└── Android App/              # Native Android application
+    ├── app/                  # Android app source code
+    │   ├── src/main/java/com/jatinmehra/  # Java source files
+    │   ├── src/main/res/     # Android resources (layouts, drawables, etc.)
+    │   └── AndroidManifest.xml  # Android app configuration
+    ├── gradle/               # Gradle build system files
+    └── build.gradle          # Project build configuration
+```
+
+### Key Components Description
+
+#### Core Application Files
+- **`app.py`**: Main FastAPI application that orchestrates all components and sets up the web server
+- **`gen_dataset.py`**: Comprehensive evaluation script for RAG system performance using the neural-bridge dataset
+- **`test_RAG.ipynb`**: Interactive Jupyter notebook for testing RAG capabilities and analyzing metrics
+
+#### API Layer (`api/`)
+- **`chat_routes.py`**: Handles chat interactions, query processing, and conversation flow
+- **`session_routes.py`**: Manages session lifecycle, history retrieval, and cleanup operations
+- **`upload_routes.py`**: Processes PDF uploads, text extraction, and document indexing
+- **`utility_routes.py`**: Provides system utilities like model listing and health checks
+
+#### Configuration (`configs/`)
+- **`config.py`**: Centralizes all application settings, API keys, model configurations, and environment variables
+
+#### Data Models (`models/`)
+- **`models.py`**: Defines Pydantic models for request/response validation and API documentation
+
+#### Business Logic (`services/`)
+- **`llm_service.py`**: Manages language model interactions, prompt engineering, and response generation
+- **`rag_service.py`**: Implements the core RAG pipeline with agentic search capabilities and tool integration
+- **`session_service.py`**: Handles session persistence, chat history, and user context management
+
+#### Utilities (`utils/`)
+- **`faiss_utils.py`**: Provides FAISS vector database operations for similarity search and indexing
+- **`session_utils.py`**: Handles session serialization, deserialization, and data persistence
+- **`text_processing.py`**: PDF text extraction, intelligent chunking, and preprocessing utilities
+
+#### Frontend (`static/`)
+- **`index.html`**: Responsive web interface with modern UI design
+- **`styles.css`**: CSS styling with mobile-first responsive design principles
+- **`app.js`**: JavaScript for dynamic interactions, file uploads, and chat functionality
+
+#### Mobile Application (`Android App/`)
+- **Native Android client**: WebView-based mobile application that interfaces with the web app
+- **Java source code**: Activity management, splash screen, and WebView configuration
+- **Android resources**: UI layouts, icons, and mobile-specific configurations
+
 ## Technical Stack
 
 ### Backend
@@ -249,3 +352,4 @@ The Android app is implemented using Java and consists of:
 ## License
 
 MIT
+
