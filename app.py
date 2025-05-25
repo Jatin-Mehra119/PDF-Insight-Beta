@@ -178,16 +178,7 @@ async def upload_pdf(
             print("Warning: TAVILY_API_KEY is not set. Web search will not function.")
 
         documents = process_pdf_file(file_path)
-        # Ensure max_length for chunk_text is appropriate.
-        # The value 1500 might be too large if estimate_tokens is text_len // 4, as it means ~6000 characters.
-        # Let's use a smaller max_length for chunks for better granularity in RAG retrieval.
-        # For `bge-large-en-v1.5` (max sequence length 512 tokens), chunks around 250-400 tokens are often good.
-        # If estimate_tokens is len(text)//4, then max_length of 250 tokens is roughly 1000 characters.
-        # Let's use max_length=256 (tokens) for chunker config, so about 1024 characters.
-        # The chunk_text function uses max_length as character count / 4. So if we want 256 tokens, max_length = 256*4 = 1024
-        # However, the current chunk_text logic is `estimate_tokens(current_chunk + paragraph) <= max_length // 4`.
-        # This means `max_length` is already considered a token limit. So `max_length=256` (tokens) is the target.
-        chunks_with_metadata = chunk_text(documents, max_length=256) # max_length in tokens
+        chunks_with_metadata = chunk_text(documents, max_length=1000) # Increased from 256 to 1000 tokens for better context
         
         embedding_model = SentenceTransformer('BAAI/bge-large-en-v1.5')
         embeddings, _ = create_embeddings(chunks_with_metadata, embedding_model) # Chunks are already with metadata
@@ -222,11 +213,25 @@ async def upload_pdf(
 # Route to chat with the document
 @app.post("/chat")
 async def chat(request: ChatRequest):
+    # Validate query
+    if not request.query or not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    if len(request.query.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Query must be at least 3 characters long")
+    
     session, found = load_session(request.session_id, model_name=request.model_name)
     if not found:
         raise HTTPException(status_code=404, detail="Session not found or expired. Please upload a document first.")
     
     try:
+        # Validate session data integrity
+        required_keys = ["index", "chunks", "model", "llm"]
+        missing_keys = [key for key in required_keys if key not in session]
+        if missing_keys:
+            print(f"Warning: Session {request.session_id} missing required data: {missing_keys}")
+            raise HTTPException(status_code=500, detail="Session data is incomplete. Please upload the document again.")
+        
         # Per-request memory to ensure chat history is correctly loaded for the agent
         agent_memory = ConversationBufferMemory(memory_key="chat_history", input_key="input", return_messages=True)
         for entry in session.get("chat_history", []):
@@ -237,15 +242,14 @@ async def chat(request: ChatRequest):
         current_request_tools = []
 
         # 1. Add the document-specific vector search tool
-        if "index" in session and "chunks" in session and "model" in session:
-            vector_search_tool_instance = create_vector_search_tool(
-                faiss_index=session["index"],
-                document_chunks_with_metadata=session["chunks"], # Pass the correct variable
-                embedding_model=session["model"] # This is the SentenceTransformer model
-            )
-            current_request_tools.append(vector_search_tool_instance)
-        else:
-            print(f"Warning: Session {request.session_id} missing data for vector_database_search tool.")
+        vector_search_tool_instance = create_vector_search_tool(
+            faiss_index=session["index"],
+            document_chunks_with_metadata=session["chunks"], # Pass the correct variable
+            embedding_model=session["model"], # This is the SentenceTransformer model
+            max_chunk_length=1000,
+            k=10
+        )
+        current_request_tools.append(vector_search_tool_instance)
 
         # 2. Conditionally add Tavily (web search) tool
         if request.use_search:
@@ -270,6 +274,10 @@ async def chat(request: ChatRequest):
             k=5 # Number of chunks for initial context
         )
         
+        print(f"Query: '{request.query}' - Found {len(initial_similar_chunks)} initial chunks")
+        if initial_similar_chunks:
+            print(f"Best chunk score: {initial_similar_chunks[0][1]:.4f}")
+        
         response = agentic_rag(
             session["llm"], 
             current_request_tools, # Pass the dynamically assembled list of tools
@@ -280,6 +288,8 @@ async def chat(request: ChatRequest):
         )
         
         response_output = response.get("output", "Sorry, I could not generate a response.")
+        print(f"Generated response length: {len(response_output)} characters")
+        
         session["chat_history"].append({"user": request.query, "assistant": response_output})
         save_session(request.session_id, session) # Save updated history and potentially other modified session state
         
