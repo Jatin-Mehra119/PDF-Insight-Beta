@@ -16,7 +16,7 @@ An advanced PDF document analysis tool that combines RAG (Retrieval Augmented Ge
 
 - [Overview](#overview)
 - [Features](#features)
-- [RAG System Metrics](#rag-system-metrics)
+- [RAG SYSTEM PERFORMANCE](#rag-system-metrics)
 - [Architecture](#architecture)
 - [Technical Stack](#technical-stack)
 - [Installation](#installation)
@@ -44,6 +44,7 @@ The application employs an agentic approach that can augment the document's info
 - **Docker Containerization**: Easy deployment with containerized application
 - **Hugging Face Integration**: Automatic deployment to Hugging Face Spaces
 - **Android Application**: Native mobile client
+
 
 ## RAG System Metrics
 
@@ -80,6 +81,138 @@ The application employs an agentic approach that can augment the document's info
 ## Architecture
 
 The application follows a modular architecture with these main components:
+
+### System Architecture Diagram
+
+```mermaid
+---
+config:
+  theme: forest
+  look: neo
+  layout: dagre
+---
+flowchart TD
+ subgraph subGraph0["Presentation Layer"]
+    direction TB
+        Browser["Web Browser UI"]
+        Android["Android WebView Client"]
+  end
+ subgraph subGraph1["API Layer"]
+    direction TB
+        APIGateway["FastAPI Entrypoints"]
+        ChatRoutes["chat_routes.py"]
+        SessionRoutes["session_routes.py"]
+        UploadRoutes["upload_routes.py"]
+        UtilityRoutes["utility_routes.py"]
+        AppMain["app.py"]
+  end
+ subgraph subGraph2["Config & Models"]
+    direction TB
+        ConfigLoader["config.py"]
+        DataModels["models.py"]
+  end
+ subgraph subGraph3["Service Layer"]
+    direction TB
+        RAGService["rag_service.py"]
+        LLMService["llm_service.py"]
+        SessionService["session_service.py"]
+  end
+ subgraph subGraph4["Utility Layer"]
+    direction TB
+        TextProc["text_processing.py"]
+        FaissUtil["faiss_utils.py"]
+        SessionUtil["session_utils.py"]
+  end
+ subgraph Storage["Storage"]
+    direction TB
+        UploadStore["/uploads (PDFs & sessions)"]
+        FAISSIndex["FAISS Index (ephemeral/disk)"]
+  end
+ subgraph subGraph6["Docker Container"]
+    direction TB
+        subGraph1
+        subGraph2
+        subGraph3
+        subGraph4
+        Storage
+  end
+ subgraph subGraph7["External & DevOps"]
+    direction TB
+        GroqAPI["Groq LLM API"]
+        TavilyAPI["Tavily Web Search API"]
+        CI["GitHub Actions CI/CD"]
+        HFS["HuggingFace Spaces"]
+        DockerfileNode["Dockerfile"]
+  end
+ subgraph subGraph8["Static Assets"]
+    direction TB
+        StaticApp["Static Web App"]
+  end
+    Browser -- HTTP JSON --> StaticApp
+    StaticApp -- HTTP JSON --> AppMain
+    Android -- HTTP JSON --> AppMain
+    AppMain -- routes --> ChatRoutes & SessionRoutes & UploadRoutes & UtilityRoutes
+    ChatRoutes -- calls --> RAGService
+    SessionRoutes -- calls --> SessionService
+    UploadRoutes -- calls --> TextProc
+    UtilityRoutes -- calls --> SessionUtil
+    RAGService -- uses --> LLMService & FaissUtil
+    RAGService -- calls --> GroqAPI & TavilyAPI
+    LLMService -- uses --> ConfigLoader
+    SessionService -- uses --> SessionUtil
+    TextProc -- writes/reads --> UploadStore
+    SessionUtil -- writes/reads --> UploadStore
+    FaissUtil -- reads/writes --> FAISSIndex
+    CI -- build & deploy --> DockerfileNode
+    DockerfileNode -- deploy --> HFS
+     Browser:::frontend
+     Android:::frontend
+     APIGateway:::api
+     ChatRoutes:::api
+     SessionRoutes:::api
+     UploadRoutes:::api
+     UtilityRoutes:::api
+     AppMain:::api
+     ConfigLoader:::service
+     DataModels:::service
+     RAGService:::service
+     LLMService:::service
+     SessionService:::service
+     TextProc:::util
+     FaissUtil:::util
+     SessionUtil:::util
+     UploadStore:::util
+     FAISSIndex:::util
+     GroqAPI:::external
+     TavilyAPI:::external
+     CI:::devops
+     HFS:::devops
+     DockerfileNode:::devops
+     StaticApp:::frontend
+    classDef frontend fill:#CCE5FF,stroke:#333,stroke-width:1px
+    classDef api fill:#DFFFD6,stroke:#333,stroke-width:1px
+    classDef service fill:#FFE5B4,stroke:#333,stroke-width:1px
+    classDef util fill:#E3E4FA,stroke:#333,stroke-width:1px
+    classDef external fill:#E0E0E0,stroke:#333,stroke-width:1px
+    classDef devops fill:#CCFFFF,stroke:#333,stroke-width:1px
+    click Android "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/Android%20App/app/src/main/res/layout/activity_splash.xml"
+    click ChatRoutes "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/api/chat_routes.py"
+    click SessionRoutes "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/api/session_routes.py"
+    click UploadRoutes "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/api/upload_routes.py"
+    click UtilityRoutes "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/api/utility_routes.py"
+    click AppMain "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/app.py"
+    click ConfigLoader "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/configs/config.py"
+    click DataModels "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/models/models.py"
+    click RAGService "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/services/rag_service.py"
+    click LLMService "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/services/llm_service.py"
+    click SessionService "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/services/session_service.py"
+    click TextProc "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/utils/text_processing.py"
+    click FaissUtil "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/utils/faiss_utils.py"
+    click SessionUtil "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/utils/session_utils.py"
+    click CI "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/.github/workflows/sync_to_hf.yml"
+    click DockerfileNode "https://github.com/jatin-mehra119/pdf-insight-beta/tree/main/Dockerfile"
+    click StaticApp "https://github.com/jatin-mehra119/pdf-insight-beta/blob/main/static/js/app.js"
+```
 
 ### Backend Components
 
@@ -226,7 +359,6 @@ PDF-Insight-Beta/
 - **Java source code**: Activity management, splash screen, and WebView configuration
 - **Android resources**: UI layouts, icons, and mobile-specific configurations
 
-
 ## Technical Stack
 
 ### Backend
@@ -264,7 +396,7 @@ PDF-Insight-Beta/
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/PDF-Insight-Beta.git
+git clone https://github.com/Jatin-Mehra119/PDF-Insight-Beta.git
 cd PDF-Insight-Beta
 ```
 
