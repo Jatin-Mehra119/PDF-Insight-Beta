@@ -24,7 +24,7 @@ class Config:
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
     
     # Model Configuration
-    DEFAULT_MODEL: str = "llama3-8b-8192"
+    DEFAULT_MODEL: str = "llama-3.1-8b-instant"
     EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
     
     # Text Processing Settings
